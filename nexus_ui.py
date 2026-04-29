@@ -40,7 +40,8 @@ class WN_PT_main_panel(bpy.types.Panel):
         col = search_box.column(align=True)
         row = col.row(align=True)
         row.prop(props, "search_query", text="", icon='VIEWZOOM')
-        row.operator("wn.search", text="Search", icon='VIEWZOOM')
+        row.operator("wn.search", text="", icon='VIEWZOOM')
+        row.operator("wn.clear_search", text="", icon='X')
         
         # --- Import Options (Horizontal & Compact) ---
         row = layout.row(align=True)

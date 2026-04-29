@@ -93,6 +93,18 @@ class WN_OT_stop_api(Operator):
         self.report({'INFO'}, "Nexus API Stopped")
         return {'FINISHED'}
 
+class WN_OT_clear_search(Operator):
+    bl_idname = "wn.clear_search"
+    bl_label = "Clear Search"
+    bl_description = "Clear search results and query"
+
+    def execute(self, context):
+        props = context.scene.wn_props
+        props.search_results.clear()
+        props.search_query = ""
+        props.status_message = "Ready"
+        return {'FINISHED'}
+
 class WN_OT_sync_config(Operator):
     bl_idname = "wn.sync_config"
     bl_label = "Sync Config"
@@ -405,6 +417,7 @@ classes = [
     WN_OT_sync_config,
     WN_OT_build_cache,
     WN_OT_search,
+    WN_OT_clear_search,
     WN_OT_import
 ]
 
