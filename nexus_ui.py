@@ -11,6 +11,20 @@ class WN_PT_main_panel(bpy.types.Panel):
         layout = self.layout
         props = context.scene.wn_props
         
+        # --- API Control ---
+        if not props.is_api_running:
+            box = layout.box()
+            col = box.column(align=True)
+            col.scale_y = 2.0
+            col.operator("wn.start_api", text="START NEXUS BRIDGE", icon='PLAY')
+            col.label(text="API must be running to search assets", icon='INFO')
+            return
+
+        # --- Header Section (Stop Button) ---
+        row = layout.row()
+        row.operator("wn.stop_api", text="Stop API", icon='QUIT')
+        row.label(text="API ACTIVE", icon='CHECKMARK')
+
         # --- Status & Progress ---
         if props.is_working or props.status_message != "Ready":
             st_box = layout.box()
@@ -66,9 +80,17 @@ class WN_PT_settings_panel(bpy.types.Panel):
     bl_parent_id = "WN_PT_main_panel"
     bl_options = {'DEFAULT_CLOSED'}
 
-    def draw(self, context):
-        layout = self.layout
+    @classmethod
+    def poll(cls, context):
         props = context.scene.wn_props
+        return props.is_api_running
+
+    def draw(self, context):
+        props = context.scene.wn_props
+        if not props.is_api_running:
+            return
+
+        layout = self.layout
         
         box = layout.box()
         col = box.column()

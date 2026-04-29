@@ -2,9 +2,96 @@ import bpy
 import os
 import threading
 import time
+import subprocess
 from bpy.types import Operator
 from .nexus_api import NexusAPI
 from . import nexus_cache, nexus_utils
+
+# Global process handle
+_API_PROCESS = None
+
+class WN_OT_start_api(Operator):
+    bl_idname = "wn.start_api"
+    bl_label = "Start Nexus API"
+    bl_description = "Launch the CodeWalker API process"
+
+    def execute(self, context):
+        global _API_PROCESS
+        props = context.scene.wn_props
+        
+        if _API_PROCESS and _API_PROCESS.poll() is None:
+            self.report({'WARNING'}, "API is already running")
+            return {'CANCELLED'}
+
+        addon_dir = os.path.dirname(__file__)
+        exe_path = os.path.join(addon_dir, "bin", "CodeWalker.API.exe")
+        
+        if not os.path.exists(exe_path):
+            self.report({'ERROR'}, f"API Executable not found at: {exe_path}")
+            return {'CANCELLED'}
+
+        # --- Read Config from JSON File ---
+        config_path = os.path.join(addon_dir, "bin", "Config", "userconfig.json")
+        if os.path.exists(config_path):
+            try:
+                import json
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                    if "GTAPath" in cfg: props.gta_path = cfg["GTAPath"]
+                    if "CodewalkerOutputDir" in cfg: props.temp_dir = cfg["CodewalkerOutputDir"]
+                    if "EnableMods" in cfg: props.enable_mods = cfg["EnableMods"]
+                self.report({'INFO'}, "Settings loaded from userconfig.json")
+            except Exception as e:
+                print(f"[WUABO Nexus] Failed to read userconfig.json: {e}")
+
+        try:
+            import ctypes
+            # Request Elevation (Admin) and SHOW window (1)
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", exe_path, None, os.path.dirname(exe_path), 1)
+            
+            props.is_api_running = True
+            props.status_message = "API Started"
+            self.report({'INFO'}, "Nexus API Started (Check UAC Prompt)")
+
+            # Auto-Sync after start
+            def _auto_sync():
+                api = NexusAPI(props.api_port)
+                # Wait for API to be responsive
+                try:
+                    ok, _ = api.get_config()
+                    if ok:
+                        # Call sync logic
+                        bpy.ops.wn.sync_config()
+                        props.status_message = "API Started & Synced"
+                        return None # Stop timer
+                except:
+                    pass
+                return 1.0 # Check again in 1s
+
+            bpy.app.timers.register(_auto_sync, first_interval=2.0)
+        except Exception as e:
+            self.report({'ERROR'}, f"Failed to start API: {e}")
+            return {'CANCELLED'}
+            
+        return {'FINISHED'}
+
+class WN_OT_stop_api(Operator):
+    bl_idname = "wn.stop_api"
+    bl_label = "Stop Nexus API"
+    bl_description = "Close the CodeWalker API process"
+
+    def execute(self, context):
+        props = context.scene.wn_props
+        api = NexusAPI(props.api_port)
+        
+        # Ask the API to close itself
+        api.shutdown()
+        
+        # Cleanup status
+        props.is_api_running = False
+        props.status_message = "API Stopped"
+        self.report({'INFO'}, "Nexus API Stopped")
+        return {'FINISHED'}
 
 class WN_OT_sync_config(Operator):
     bl_idname = "wn.sync_config"
@@ -313,6 +400,8 @@ class WN_OT_import(Operator):
 
 
 classes = [
+    WN_OT_start_api,
+    WN_OT_stop_api,
     WN_OT_sync_config,
     WN_OT_build_cache,
     WN_OT_search,

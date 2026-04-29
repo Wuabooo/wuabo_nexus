@@ -16,12 +16,11 @@ class NexusAPI:
         except Exception as e:
             return False, str(e)
 
-    def set_config(self, gta_path=None, output_dir=None, enable_mods=False, dlc=None):
+    def set_config(self, gta_path=None, output_dir=None, enable_mods=False):
         payload = {
             "GTAPath": gta_path,
             "CodewalkerOutputDir": output_dir,
-            "EnableMods": enable_mods,
-            "Dlc": dlc or ""
+            "EnableMods": enable_mods
         }
         try:
             response = requests.post(f"{self.base_url}/set-config", json=payload, timeout=10)
@@ -90,5 +89,11 @@ class NexusAPI:
             
             final_list = list(set(all_results))
             return True, final_list
+        except Exception as e:
+            return False, str(e)
+    def shutdown(self):
+        try:
+            response = requests.post(f"{self.base_url}/shutdown", timeout=2)
+            return response.status_code == 200, "Shutdown requested"
         except Exception as e:
             return False, str(e)

@@ -13,9 +13,6 @@ from bpy.types import PropertyGroup
 class NexusSearchResult(PropertyGroup):
     name: StringProperty(name="Path")
 
-class NexusDLCItem(PropertyGroup):
-    name: StringProperty(name="DLC Name")
-    total: IntProperty(name="Total Assets")
 
 class WUABO_Nexus_Properties(PropertyGroup):
     # --- API Settings ---
@@ -79,6 +76,9 @@ class WUABO_Nexus_Properties(PropertyGroup):
     is_working: BoolProperty(default=False)
     progress: FloatProperty(name="Progress", default=0.0, min=0.0, max=100.0)
     
+    # --- API Process ---
+    is_api_running: BoolProperty(name="API Running", default=False)
+    
     # --- Cache ---
     is_cache_built: BoolProperty(default=False)
     cache_info: StringProperty(name="Cache Info", default="Cache not built")
@@ -86,7 +86,6 @@ class WUABO_Nexus_Properties(PropertyGroup):
 def register():
     from . import nexus_cache
     bpy.utils.register_class(NexusSearchResult)
-    bpy.utils.register_class(NexusDLCItem)
     bpy.utils.register_class(WUABO_Nexus_Properties)
     bpy.types.Scene.wn_props = PointerProperty(type=WUABO_Nexus_Properties)
     
@@ -100,5 +99,4 @@ def register():
 def unregister():
     del bpy.types.Scene.wn_props
     bpy.utils.unregister_class(WUABO_Nexus_Properties)
-    bpy.utils.unregister_class(NexusDLCItem)
     bpy.utils.unregister_class(NexusSearchResult)
