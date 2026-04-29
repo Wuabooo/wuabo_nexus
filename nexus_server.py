@@ -39,13 +39,17 @@ class NexusRequestHandler(http.server.BaseHTTPRequestHandler):
                     api = NexusAPI(props.api_port)
                     
                     # 1. Try exact match from cache
-                    results = nexus_cache.search_cache(asset_name, limit=1)
+                    results = nexus_cache.search_cache(asset_name, limit=5)
                     
                     # 2. Try exact match from API
                     if not results:
                         ok, api_results = api.search_file(asset_name)
                         if ok and api_results:
                             results = api_results
+                    
+                    # Filter for model files strictly
+                    if results:
+                        results = [r for r in results if r.lower().endswith(('.ydr', '.yft', '.ydd'))]
                     
                     # 3. Fallback: Try multiple variations
                     if not results:
@@ -64,8 +68,8 @@ class NexusRequestHandler(http.server.BaseHTTPRequestHandler):
                             print(f"[WUABO Nexus Server] Trying fallback variation: {var}")
                             ok, fallback_results = api.search_file(var)
                             if ok and fallback_results:
-                                # Filter for model files (.ydr, .yft)
-                                models = [r for r in fallback_results if r.lower().endswith(('.ydr', '.yft'))]
+                                # Filter for model files (.ydr, .yft, .ydd)
+                                models = [r for r in fallback_results if r.lower().endswith(('.ydr', '.yft', '.ydd'))]
                                 if models:
                                     models.sort(key=len)
                                     results = [models[0]]

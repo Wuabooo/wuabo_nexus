@@ -10,6 +10,23 @@ from . import nexus_cache, nexus_utils
 # Global process handle
 _API_PROCESS = None
 
+@bpy.app.handlers.persistent
+def on_load_post(dummy):
+    # This runs when a new file is opened or created
+    # We check if the API is still alive and update the status
+    for scene in bpy.data.scenes:
+        if hasattr(scene, "wn_props"):
+            props = scene.wn_props
+            api = NexusAPI(props.api_port)
+            # Use a quick ping to check if alive (short timeout to avoid hang)
+            try:
+                ok, _ = api.get_config(timeout=0.2)
+                props.is_api_running = ok
+                if ok:
+                    props.status_message = "API Connected"
+            except:
+                props.is_api_running = False
+
 class WN_OT_start_api(Operator):
     bl_idname = "wn.start_api"
     bl_label = "Start Nexus API"
@@ -193,17 +210,20 @@ class WN_OT_search(Operator):
             lx = x.lower()
             if lx.endswith(".yft"): return 0
             if lx.endswith(".ydr"): return 1
-            if "+hi.ytd" in lx: return 10 # Put texture dictionaries at the end
-            if lx.endswith(".ytd"): return 5
+            if lx.endswith(".ydd"): return 2
             return 8
 
         results.sort(key=lambda x: (search_priority(x), x.lower()))
 
         for res in results:
+            # Strictly whitelist only 3D models (.ydr, .yft, .ydd)
+            lx = res.lower()
+            if not (lx.endswith(".ydr") or lx.endswith(".yft") or lx.endswith(".ydd")):
+                continue
             item = props.search_results.add()
             item.name = res
             
-        props.status_message = f"Found {len(results)} assets"
+        props.status_message = f"Found {len(props.search_results)} assets"
         return {'FINISHED'}
 
 def import_asset_by_path(asset_path, context):
@@ -424,7 +444,12 @@ classes = [
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
+    bpy.app.handlers.load_post.append(on_load_post)
+    # Initial check (using timer to avoid _RestrictData error during registration)
+    bpy.app.timers.register(lambda: on_load_post(None), first_interval=1.0)
 
 def unregister():
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+    if on_load_post in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(on_load_post)

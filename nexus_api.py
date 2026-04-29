@@ -7,9 +7,9 @@ class NexusAPI:
         self.port = port
         self.base_url = f"http://localhost:{port}/api"
 
-    def get_config(self):
+    def get_config(self, timeout=5):
         try:
-            response = requests.get(f"{self.base_url}/get-config", timeout=5)
+            response = requests.get(f"{self.base_url}/get-config", timeout=timeout)
             if response.status_code == 200:
                 return True, response.json()
             return False, f"Error {response.status_code}"
