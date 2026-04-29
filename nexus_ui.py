@@ -52,21 +52,23 @@ class WN_PT_main_panel(bpy.types.Panel):
 
         # --- Search Results ---
         if len(props.search_results) > 0:
-            layout.label(text=f"Results ({len(props.search_results)}):")
-            res_box = layout.box()
-            col = res_box.column(align=True)
+            layout.separator()
+            layout.label(text=f"Results ({len(props.search_results)}):", icon='COLLAPSEMENU')
             
-            for i, result in enumerate(props.search_results):
-                row = col.row(align=True)
-                lx = result.name.lower()
+            # Using a simple column for the list
+            col = layout.column(align=True)
+            for i in range(len(props.search_results)):
+                item = props.search_results[i]
+                row = col.box().row(align=True)
                 
-                # Dynamic Icons
+                lx = item.name.lower()
                 ico = 'FILE_BLANK'
-                if lx.endswith(".yft"): ico = 'CAR'
+                if lx.endswith(".yft"): ico = 'MESH_DATA'
                 elif lx.endswith(".ydr"): ico = 'OBJECT_DATAMODE'
+                elif lx.endswith(".ydd"): ico = 'PACKAGE'
                 elif lx.endswith(".ytd"): ico = 'IMAGE_DATA'
                 
-                name = result.name.split("/")[-1]
+                name = item.name.replace("\\", "/").split("/")[-1]
                 row.label(text=name, icon=ico)
                 
                 op = row.operator("wn.import_asset", text="Import")

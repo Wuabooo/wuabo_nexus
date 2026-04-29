@@ -38,8 +38,8 @@ class NexusRequestHandler(http.server.BaseHTTPRequestHandler):
                     props = bpy.context.scene.wn_props
                     api = NexusAPI(props.api_port)
                     
-                    # 1. Try exact match from cache
-                    results = nexus_cache.search_cache(asset_name, limit=5)
+                    # 1. Try exact match from cache (higher limit to allow exact match filtering to work on tuning vehicles)
+                    results = nexus_cache.search_cache(asset_name, limit=200)
                     
                     # 2. Try exact match from API
                     if not results:
@@ -77,7 +77,21 @@ class NexusRequestHandler(http.server.BaseHTTPRequestHandler):
                                     break
                     
                     if results:
-                        best_match = results[0]
+                        import os
+                        
+                        # 1. Prioritize exact basename matches (e.g. comet5.yft over comet5_wing_f.yft)
+                        exact_matches = []
+                        for r in results:
+                            base = os.path.splitext(os.path.basename(r))[0].lower()
+                            if base == asset_name.lower():
+                                exact_matches.append(r)
+                                
+                        pool = exact_matches if exact_matches else results
+                        
+                        # 2. Prioritize base .yft over _hi.yft if both exist
+                        base_results = [r for r in pool if not r.lower().endswith('_hi.yft')]
+                        best_match = base_results[0] if base_results else pool[0]
+                        
                         print(f"[WUABO Nexus Server] Importing: {best_match}")
                         import_asset_by_path(best_match, bpy.context)
                     else:

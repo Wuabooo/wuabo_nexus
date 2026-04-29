@@ -220,10 +220,13 @@ class WN_OT_search(Operator):
             lx = res.lower()
             if not (lx.endswith(".ydr") or lx.endswith(".yft") or lx.endswith(".ydd")):
                 continue
+            
+            print(f"[WUABO Nexus] Adding to results: {res}")
             item = props.search_results.add()
             item.name = res
             
         props.status_message = f"Found {len(props.search_results)} assets"
+        print(f"[WUABO Nexus] Search complete. Total displayed: {len(props.search_results)}")
         return {'FINISHED'}
 
 def import_asset_by_path(asset_path, context):
@@ -244,15 +247,17 @@ def import_asset_by_path(asset_path, context):
         # 1. Determine files to download
         files_to_download = [asset_path]
         
-        # Vehicle logic: if we import a .yft, also try to get the _hi.yft
-        if asset_path.lower().endswith(".yft") and not asset_path.lower().endswith("_hi.yft"):
-            hi_name = os.path.basename(asset_path).replace(".yft", "_hi.yft")
-            ok_hi, res_hi = api.search_file(hi_name)
-            if ok_hi and res_hi:
-                # Add the first hi result if it's not already there
-                if res_hi[0] not in files_to_download:
-                    files_to_download.append(res_hi[0])
-                    print(f"[WUABO Nexus] Found high-detail model: {res_hi[0]}")
+        # Vehicle logic: get base and hi models together
+        if asset_path.lower().endswith(".yft"):
+            if not asset_path.lower().endswith("_hi.yft"):
+                target_name = os.path.basename(asset_path).replace(".yft", "_hi.yft")
+            else:
+                target_name = os.path.basename(asset_path).replace("_hi.yft", ".yft")
+                
+            ok_s, res_s = api.search_file(target_name)
+            if ok_s and res_s and res_s[0] not in files_to_download:
+                files_to_download.append(res_s[0])
+                print(f"[WUABO Nexus] Found paired model: {res_s[0]}")
 
         # 2. Download Model XMLs
         for f_path in files_to_download:
@@ -264,13 +269,23 @@ def import_asset_by_path(asset_path, context):
         # 3. Deep Texture Discovery (for all files)
         paths_to_download = []
         for f_path in files_to_download:
+            base_no_ext = os.path.splitext(os.path.basename(f_path))[0]
+            
+            # 1. Always try a YTD with the exact same name (Crucial for YDDs / Peds)
+            ok_s, res_s = api.search_file(base_no_ext + ".ytd")
+            if ok_s and res_s:
+                if res_s[0] not in paths_to_download:
+                    paths_to_download.append(res_s[0])
+            
+            # 2. Check XML internal TextureDictionary references (For YDR/YFT)
             xml_path = os.path.join(temp_dir, os.path.basename(f_path) + ".xml")
             if os.path.exists(xml_path):
                 tex_dict_name = nexus_utils.get_texture_dictionary_name(xml_path)
-                if tex_dict_name:
+                if tex_dict_name and tex_dict_name.lower() != base_no_ext.lower():
                     ok_s, res_s = api.search_file(tex_dict_name + ".ytd")
                     if ok_s and res_s:
-                        paths_to_download.append(res_s[0])
+                        if res_s[0] not in paths_to_download:
+                            paths_to_download.append(res_s[0])
         
         # Shared textures
         is_vehicle = any(f.lower().endswith(".yft") for f in files_to_download)
