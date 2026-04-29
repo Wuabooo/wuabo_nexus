@@ -387,7 +387,7 @@ def _polish_import(new_objects, asset_path, props):
                     
                     root = bpy.context.view_layer.objects.active
                     root.name = os.path.splitext(os.path.basename(asset_path))[0]
-                    root.sollum_type = 'NONE' 
+                    root.sollum_type = 'sollumz_none' 
 
         if props.mark_as_asset and root:
             root.asset_mark()
