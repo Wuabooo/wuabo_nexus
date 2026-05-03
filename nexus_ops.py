@@ -7,6 +7,22 @@ from bpy.types import Operator
 from .nexus_api import NexusAPI
 from . import nexus_cache, nexus_utils
 
+# Session-level API search cache - avoids redundant network calls for shared textures
+_search_cache = {}
+
+def cached_search(api, filename):
+    """Search with session-level caching. Eliminates hundreds of duplicate API calls."""
+    if filename in _search_cache:
+        return _search_cache[filename]
+    result = api.search_file(filename)
+    _search_cache[filename] = result
+    return result
+
+def clear_search_cache():
+    """Clear the search cache (call when starting a new batch)."""
+    global _search_cache
+    _search_cache = {}
+
 # Global process handle
 _API_PROCESS = None
 
@@ -73,14 +89,13 @@ class WN_OT_start_api(Operator):
             # Auto-Sync after start
             def _auto_sync():
                 api = NexusAPI(props.api_port)
-                # Wait for API to be responsive
                 try:
-                    ok, _ = api.get_config()
+                    # Quick check to see if API is responding (short timeout)
+                    ok, _ = api.get_config(timeout=0.5)
                     if ok:
-                        # Call sync logic
+                        # Call our now-asynchronous sync logic
                         bpy.ops.wn.sync_config()
-                        props.status_message = "API Started & Synced"
-                        return None # Stop timer
+                        return None # Stop timer, sync is handled by the operator's thread
                 except:
                     pass
                 return 1.0 # Check again in 1s
@@ -131,24 +146,31 @@ class WN_OT_sync_config(Operator):
         props = context.scene.wn_props
         api = NexusAPI(props.api_port)
         
-        # Try to fetch existing config if local path is empty
-        if not props.gta_path:
-            ok_get, current_cfg = api.get_config()
-            if ok_get and current_cfg.get("GTAPath"):
-                props.gta_path = current_cfg["GTAPath"]
-                self.report({'INFO'}, f"Fetched GTA Path from API: {props.gta_path}")
+        props.status_message = "Syncing..."
+        
+        def _thread():
+            # Try to fetch existing config if local path is empty
+            if not props.gta_path:
+                ok_get, current_cfg = api.get_config()
+                if ok_get and current_cfg.get("GTAPath"):
+                    props.gta_path = current_cfg["GTAPath"]
 
-        ok, msg = api.set_config(
-            gta_path=props.gta_path,
-            output_dir=props.temp_dir,
-            enable_mods=props.enable_mods
-        )
-        
-        if ok:
-            self.report({'INFO'}, "Config synced successfully")
-        else:
-            self.report({'ERROR'}, f"Sync failed: {msg}")
-        
+            ok, msg = api.set_config(
+                gta_path=props.gta_path,
+                output_dir=props.temp_dir,
+                enable_mods=props.enable_mods
+            )
+            
+            def _finish():
+                if ok:
+                    props.status_message = "API Started & Synced"
+                else:
+                    props.status_message = f"Sync Error: {msg}"
+                return None
+            
+            bpy.app.timers.register(_finish, first_interval=0.0)
+
+        threading.Thread(target=_thread, daemon=True).start()
         return {'FINISHED'}
 
 class WN_OT_build_cache(Operator):
@@ -229,21 +251,10 @@ class WN_OT_search(Operator):
         print(f"[WUABO Nexus] Search complete. Total displayed: {len(props.search_results)}")
         return {'FINISHED'}
 
-def import_asset_by_path(asset_path, context):
-    """Core logic to import an asset by its full RPF path."""
-    props = context.scene.wn_props
-    temp_dir = bpy.path.abspath(props.temp_dir)
-    api = NexusAPI(props.api_port)
-
-    if not temp_dir or not os.path.isdir(temp_dir):
-        print("[WUABO Nexus] Error: Invalid temp directory")
-        return False
-
-    props.is_working = True
-    basename = os.path.basename(asset_path)
-    props.status_message = f"Downloading {basename}..."
-
-    def _thread():
+def download_only(asset_path, temp_dir, api):
+    """Downloads all necessary files for an asset to the temp directory.
+    NO BLENDER API CALLS HERE (runs in background thread)."""
+    try:
         # 1. Determine files to download
         files_to_download = [asset_path]
         
@@ -254,89 +265,107 @@ def import_asset_by_path(asset_path, context):
             else:
                 target_name = os.path.basename(asset_path).replace("_hi.yft", ".yft")
                 
-            ok_s, res_s = api.search_file(target_name)
+            ok_s, res_s = cached_search(api, target_name)
             if ok_s and res_s and res_s[0] not in files_to_download:
                 files_to_download.append(res_s[0])
-                print(f"[WUABO Nexus] Found paired model: {res_s[0]}")
 
         # 2. Download Model XMLs
         for f_path in files_to_download:
-            props.status_message = f"Downloading {os.path.basename(f_path)}..."
             ok, msg = api.download_files(f_path, temp_dir, xml=True)
-            if not ok:
-                print(f"[WUABO Nexus] Warning: Failed to download {f_path}: {msg}")
+            if not ok: print(f"[WUABO Nexus] Download warning: {msg}")
 
-        # 3. Deep Texture Discovery (for all files)
+        # 3. Deep Texture Discovery
         paths_to_download = []
         for f_path in files_to_download:
             base_no_ext = os.path.splitext(os.path.basename(f_path))[0]
             
-            # 1. Always try a YTD with the exact same name (Crucial for YDDs / Peds)
-            ok_s, res_s = api.search_file(base_no_ext + ".ytd")
-            if ok_s and res_s:
-                if res_s[0] not in paths_to_download:
-                    paths_to_download.append(res_s[0])
+            # YTD search
+            ok_s, res_s = cached_search(api, base_no_ext + ".ytd")
+            if ok_s and res_s: paths_to_download.append(res_s[0])
             
-            # 2. Check XML internal TextureDictionary references (For YDR/YFT)
+            # XML internal references
             xml_path = os.path.join(temp_dir, os.path.basename(f_path) + ".xml")
             if os.path.exists(xml_path):
+                from . import nexus_utils
                 tex_dict_name = nexus_utils.get_texture_dictionary_name(xml_path)
                 if tex_dict_name and tex_dict_name.lower() != base_no_ext.lower():
-                    ok_s, res_s = api.search_file(tex_dict_name + ".ytd")
-                    if ok_s and res_s:
-                        if res_s[0] not in paths_to_download:
-                            paths_to_download.append(res_s[0])
+                    ok_s, res_s = cached_search(api, tex_dict_name + ".ytd")
+                    if ok_s and res_s: paths_to_download.append(res_s[0])
         
         # Shared textures
         is_vehicle = any(f.lower().endswith(".yft") for f in files_to_download)
         if is_vehicle:
             for share in ["vehshare.ytd", "vehshare_truck.ytd"]:
-                ok_s, res_s = api.search_file(share)
+                ok_s, res_s = cached_search(api, share)
                 if ok_s and res_s: paths_to_download.append(res_s[0])
 
         if paths_to_download:
             api.download_files(list(set(paths_to_download)), temp_dir, xml=False)
+            from . import nexus_utils
             nexus_utils.flatten_textures(temp_dir)
+            
+        return True
+    except Exception as e:
+        print(f"[WUABO Nexus] Download error: {e}")
+        return False
 
-        # 3. Import in Blender
-        def _main_thread():
+def import_local_asset(asset_path, asset_folder, context):
+    """Imports an asset from its dedicated subfolder.
+    RUNS IN MAIN THREAD."""
+    props = context.scene.wn_props
+    basename = os.path.basename(asset_path)
+    
+    if not os.path.exists(asset_folder):
+        print(f"[WUABO Nexus] Error: Asset folder not found {asset_folder}")
+        return
+
+    props.is_working = True
+    props.status_message = f"Importing {basename}..."
+
+    try:
+        if not hasattr(bpy.ops, "sollumz"):
+            _finish_work(props, "Sollumz not found!")
+            return
+        
+        existing_objs = set(bpy.data.objects)
+        
+        # Files to import (all XMLs in the dedicated folder)
+        xml_files = [f for f in os.listdir(asset_folder) if f.lower().endswith(".xml")]
+        
+        for xml_name in xml_files:
+            print(f"[WUABO Nexus] Importing local XML: {xml_name}")
+            bpy.ops.sollumz.import_assets(directory=asset_folder, files=[{"name": xml_name}])
+        
+        new_objs = [o for o in bpy.data.objects if o not in existing_objs]
+        _polish_import(new_objs, asset_path, props)
+        
+        props.status_message = f"Imported {basename}"
+        
+        # Cleanup the specific asset folder
+        if props.clean_after_import:
+            import shutil
             try:
-                if not hasattr(bpy.ops, "sollumz"):
-                    _finish_work(props, "Sollumz not found!")
-                    return
-                
-                existing_objs = set(bpy.data.objects)
-                
-                # Import all XMLs found for this asset
-                xml_files = [f for f in os.listdir(temp_dir) if f.lower().endswith(".xml") and any(os.path.splitext(os.path.basename(p))[0] in f for p in files_to_download)]
-                
-                for xml_name in xml_files:
-                    print(f"[WUABO Nexus] Importing to Blender: {xml_name}")
-                    bpy.ops.sollumz.import_assets(directory=temp_dir, files=[{"name": xml_name}])
-                
-                new_objs = [o for o in bpy.data.objects if o not in existing_objs]
-                _polish_import(new_objs, asset_path, props)
-                
-                props.status_message = f"Imported {basename}"
+                shutil.rmtree(asset_folder)
+                print(f"[WUABO Nexus] Cleaned folder: {basename}")
             except Exception as e:
-                print(f"[WUABO Nexus] Import error: {e}")
-                props.status_message = f"Error: {e}"
-            finally:
-                if props.clean_after_import:
-                    print(f"[WUABO Nexus] Cleaning temp files in {temp_dir}...")
-                    # Delete the XML and common texture types
-                    for f in os.listdir(temp_dir):
-                        if f.lower().endswith((".xml", ".dds", ".png", ".jpg", ".tga", ".ytd")):
-                            try:
-                                os.remove(os.path.join(temp_dir, f))
-                            except Exception as e:
-                                print(f"[WUABO Nexus] Could not delete {f}: {e}")
-                
-                props.is_working = False
-            return None
+                print(f"[WUABO Nexus] Cleanup warning: {e}")
+    except Exception as e:
+        print(f"[WUABO Nexus] Import error: {e}")
+        props.status_message = f"Error: {e}"
+    finally:
+        props.is_working = False
 
-        bpy.app.timers.register(_main_thread, first_interval=0.0)
-
+def import_asset_by_path(asset_path, context):
+    """Old entry point - now just a wrapper for backward compatibility or single imports."""
+    props = context.scene.wn_props
+    temp_dir = bpy.path.abspath(props.temp_dir)
+    api = NexusAPI(props.api_port)
+    
+    def _thread():
+        if download_only(asset_path, temp_dir, api):
+            def _main(): import_local_asset(asset_path, context); return None
+            bpy.app.timers.register(_main, first_interval=0.0)
+            
     threading.Thread(target=_thread, daemon=True).start()
     return True
 
@@ -355,10 +384,9 @@ def _polish_import(new_objects, asset_path, props):
         if bpy.ops.object.mode_set.poll():
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        # Sollumz types to keep/remove
-        COLLISION_TYPES = {"sollumz_bound_composite", "sollumz_bound_box", "sollumz_bound_sphere", 
-                           "sollumz_bound_capsule", "sollumz_bound_cylinder", "sollumz_bound_disc", 
-                           "sollumz_bound_geometry", "sollumz_bound_geometry_bvH"}
+        # Disable undo during polish to prevent storing hundreds of undo states
+        undo_steps = bpy.context.preferences.edit.undo_steps
+        bpy.context.preferences.edit.undo_steps = 0
 
         # Find the main root (Drawable or Fragment)
         root = None
@@ -374,41 +402,34 @@ def _polish_import(new_objects, asset_path, props):
             for obj in new_objects:
                 if obj.name not in bpy.data.objects: continue
                 s_type = getattr(obj, "sollum_type", "").lower()
-                print(f"[WUABO Nexus] Debug: {obj.name} | SollumType: {s_type} | Type: {obj.type}")
                 
-                # UNIVERSAL GEOMETRY DETECTION
                 # If it's a mesh and NOT a collision/bound type, we rescue it
                 is_collision = "bound" in s_type or "collision" in s_type
                 if obj.type == 'MESH' and not is_collision:
-                    print(f"[WUABO Nexus] Rescuing visual mesh: {obj.name}")
                     geometries.append(obj)
                     
-                    # Apply modifiers and Unparent
-                    bpy.context.view_layer.objects.active = obj
-                    obj.select_set(True)
+                    # Apply modifiers directly (faster than bpy.ops)
                     for mod in list(obj.modifiers):
-                        try: bpy.ops.object.modifier_apply(modifier=mod.name)
+                        try:
+                            bpy.context.view_layer.objects.active = obj
+                            bpy.ops.object.modifier_apply(modifier=mod.name)
                         except: pass
                     
+                    # Unparent while keeping world transform
                     world_mat = obj.matrix_world.copy()
                     obj.parent = None
                     obj.matrix_world = world_mat
                     continue
 
-                # Everything else that isn't a rescued mesh gets marked for removal
-                # (Armatures, Dummies, Empty parents, Collisions)
                 to_remove.append(obj)
 
-            print(f"[WUABO Nexus] Geometries rescued: {len(geometries)}, Objects to remove: {len(to_remove)}")
-
-            # 3. Final removal
-            bpy.ops.object.select_all(action='DESELECT')
+            # Batch removal
             for obj in to_remove:
                 if obj.name in bpy.data.objects:
                     try: bpy.data.objects.remove(obj, do_unlink=True)
                     except: pass
             
-            # 4. Join and Rename
+            # Join and Rename
             if geometries:
                 geometries = [o for o in geometries if o.name in bpy.data.objects]
                 if geometries:
@@ -427,6 +448,12 @@ def _polish_import(new_objects, asset_path, props):
         if props.mark_as_asset and root:
             root.asset_mark()
             root.asset_generate_preview()
+            # Hide AFTER preview is generated to prevent viewport lag
+            root.hide_set(True)
+            root.hide_viewport = True
+
+        # Restore undo
+        bpy.context.preferences.edit.undo_steps = undo_steps
 
     except Exception as e:
         print(f"[WUABO Nexus] Polish Error: {e}")

@@ -26,12 +26,31 @@ class WN_PT_main_panel(bpy.types.Panel):
         row.label(text="API ACTIVE", icon='CHECKMARK')
 
         # --- Status & Progress ---
-        if props.is_working or props.status_message != "Ready":
+        from . import nexus_server
+        progress = nexus_server.get_progress()
+        total_q = progress["total_queued"]
+        total_dl = progress["total_downloaded"]
+        total_imp = progress["total_imported"]
+        total_skip = progress["total_skipped"]
+        dl_pending = progress["download_pending"]
+        imp_pending = progress["import_pending"]
+
+        if props.is_working or props.status_message != "Ready" or total_q > 0:
             st_box = layout.box()
             col = st_box.column(align=True)
+            
+            if total_q > 0:
+                col.label(text=f"Downloaded: {total_dl}/{total_q}", icon='IMPORT')
+                col.label(text=f"Imported: {total_imp}/{total_q}", icon='CHECKMARK')
+                if total_skip > 0:
+                    col.label(text=f"Skipped: {total_skip} (existing)", icon='FORWARD')
+                if dl_pending > 0 or imp_pending > 0:
+                    col.label(text=f"Pending: {dl_pending} dl / {imp_pending} import", icon='TIME')
+
             col.label(text=props.status_message, icon='INFO')
             if props.is_working:
-                col.progress(factor=props.progress / 100.0 if props.progress > 0 else 0.5)
+                factor = (total_imp + total_skip) / total_q if total_q > 0 else 0.5
+                col.progress(factor=factor)
 
         layout.separator()
 
